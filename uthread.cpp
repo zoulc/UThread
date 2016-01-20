@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <ucontext.h>
 
 #define STACK_SIZE 4192
@@ -20,8 +21,9 @@ struct uthread_struct {
 static struct uthread_struct sched_thread;	// scheduler
 static struct uthread_struct uthreads[UTHREAD_MAX_NUM];
 
-static const int main_utid = 0;		// utid for main routine
+static int main_utid;			// utid for main routine
 static int lastrun_utid = -1;
+static int initialized = 0;
 
 typedef void (*pfunc_t)(void);
 
@@ -35,7 +37,7 @@ static void uthread_make(struct uthread_struct *uthread) {
 	getcontext(&uthread->context);
     uthread->context.uc_stack.ss_sp = uthread->stack;
     uthread->context.uc_stack.ss_size = STACK_SIZE;
-    uthread->context.uc_link = &sched_thread.context;
+    uthread->context.uc_link = NULL;
     uthread->status = RUNNABLE;
 }
 
@@ -49,6 +51,7 @@ int uthread_create(void (*func)(void)) {
 		return -1;
 	}
 	uthread_make(&uthreads[utid]);
+    uthreads[utid].context.uc_link = &sched_thread.context;
     makecontext(&uthreads[utid].context, (pfunc_t)uthread_wrapper, 2, func, &uthreads[utid].status);
 	return utid;
 }
@@ -75,7 +78,7 @@ void agent2() {
 	}
 }
 
-void scheduler() {
+static void scheduler() {
 	printf("running scheduler\n");
 	for (int utid = lastrun_utid + 1; utid != lastrun_utid;
 		utid = (utid + 1) % UTHREAD_MAX_NUM)
@@ -86,20 +89,29 @@ void scheduler() {
 	printf("no runnable threads, return from scheduler\n");
 }
 
-void uthread_init() {
+static void uthread_init() {
 	uthread_make(&sched_thread);
     makecontext(&sched_thread.context, scheduler, 0);
+	main_utid = uthread_create(NULL);
+	initialized = 1;
+}
+
+void uthread_runall() {
+	if (initialized == 0)
+		uthread_init();
+	swapcontext(&uthreads[main_utid].context, &sched_thread.context);
 }
 
 int main() {
-	uthread_init();
 	uthread_create(agent1);
 	uthread_create(agent2);
-	printf("preparing to setcontext ...\n");
-	scheduler();
-	for (int i = 0; i < 2; ++i)
-		printf("uthreads[%d].status = %d\n", i, (int)(uthreads[i].status));
-	printf("sched_thread.status = %d\n", (int)(sched_thread.status));
+	printf("preparing to run concurrent threads ...\n");
+	uthread_runall();
+	while (true) {
+		printf("hello from main thread\n");
+		sleep(1);
+		uthread_yield();
+	}
 	printf("back to main and all clear!\n");
 	return 0;
 }
