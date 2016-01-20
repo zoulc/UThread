@@ -10,45 +10,47 @@ enum uthread_stat {
 	RUNNABLE,
 };
 
-static struct uthread_struct {
+struct uthread_struct {
 	ucontext_t context;
 	char stack[STACK_SIZE];
 	void (*func)(void);
 	uthread_stat status;
-} uthreads[UTHREAD_MAX_NUM];
+};
 
-static const int sched_utid = 0;
-static int lastrun_utid = 0;
+static struct uthread_struct sched_thread;	// scheduler
+static struct uthread_struct uthreads[UTHREAD_MAX_NUM];
 
-static void uthread_create_utid(int utid, void (*func)(void)) {
-	getcontext(&uthreads[utid].context);
-    uthreads[utid].context.uc_stack.ss_sp = uthreads[utid].stack;
-    uthreads[utid].context.uc_stack.ss_size = STACK_SIZE;
-    uthreads[utid].context.uc_link = &uthreads[sched_utid].context;
-    uthreads[utid].status = RUNNABLE;
-    makecontext(&uthreads[utid].context, func, 0);
+static const int main_utid = 0;		// utid for main routine
+static int lastrun_utid = -1;
+
+static void uthread_make(struct uthread_struct *uthread, void (*func)(void)) {
+	getcontext(&uthread->context);
+    uthread->context.uc_stack.ss_sp = uthread->stack;
+    uthread->context.uc_stack.ss_size = STACK_SIZE;
+    uthread->context.uc_link = NULL;
+    uthread->status = RUNNABLE;
+    makecontext(&uthread->context, func, 0);
 }
 
 int uthread_create(void (*func)(void)) {
 	int utid;
-	for (utid = 1; utid < UTHREAD_MAX_NUM; ++utid)
+	for (utid = 0; utid < UTHREAD_MAX_NUM; ++utid)
 		if (uthreads[utid].status == FREE)
 			break;
 	if (utid == UTHREAD_MAX_NUM) {
 		printf(" [error] run out of available uthread slot \n");
 		return -1;
 	}
-	uthread_create_utid(utid, func);
+	uthread_make(&uthreads[utid], func);
+	return utid;
 }
 
 int uthread_self() {
-	printf("running uthread_self() = %d\n", lastrun_utid);
 	return lastrun_utid;
 }
 
 void uthread_yield() {
-	printf("running uthread_yield()\n");
-	swapcontext(&uthreads[uthread_self()].context, &uthreads[sched_utid].context);
+	swapcontext(&uthreads[uthread_self()].context, &sched_thread.context);
 }
 
 void agent1() {
@@ -71,15 +73,14 @@ void scheduler() {
 	printf("running scheduler\n");
 	for (int utid = lastrun_utid + 1; utid != lastrun_utid;
 		utid = (utid + 1) % UTHREAD_MAX_NUM)
-		if (utid != sched_utid && uthreads[utid].status == RUNNABLE) {
-			printf("scheduling uthread[%d] to run\n", utid);
+		if (uthreads[utid].status == RUNNABLE) {
 			lastrun_utid = utid;
 			setcontext(&uthreads[utid].context);
 		}
 }
 
 void uthread_init() {
-	uthread_create_utid(sched_utid, scheduler);
+	uthread_make(&sched_thread, scheduler);
 }
 
 int main() {
