@@ -66,20 +66,19 @@ void uthread_yield() {
 	swapcontext(&uthreads[uthread_self()].context, &sched_thread.context);
 }
 
-void agent1() {
-	for (int i = 0; i < 10; ++i) {
-		printf("hello, world! --from agent1, i = %d\n", i);
-		for (int j = 0; j < 100000000; ++j)
-			;
-	}
+void uthread_exit() {
+	printf("reaped a thread\n");
+	uthreads[uthread_self()].status = FREE;
 }
 
-void agent2() {
-	for (int i = 0; i < 10; ++i) {
-		printf("hello, world! --from agent2, i = %d\n", i);
-		for (int j = 0; j < 100000000; ++j)
-			;
-	}
+void uthread_cancel(int utid) {
+	printf("reaped a thread\n");
+	uthreads[utid].status = FREE;
+}
+
+void uthread_join(int utid) {
+	while (uthreads[utid].status != FREE)
+		uthread_yield();
 }
 
 static void scheduler() {
@@ -94,7 +93,7 @@ static void scheduler() {
 	printf("no runnable threads, return from scheduler\n");
 }
 
-static void sigvtalrm_handler(int sig) {
+static void sigalrm_handler(int sig) {
 	printf("received signal SIGVTALRM\n");
 	uthread_yield();
 }
@@ -108,35 +107,21 @@ static void uthread_init() {
 	main_utid = uthread_create(NULL);
 	sched_thread.context.uc_link = &uthreads[main_utid].context;
 
-	action.sa_handler = sigvtalrm_handler;
+	action.sa_handler = sigalrm_handler;
 	sigemptyset(&action.sa_mask);
 	action.sa_flags = SA_RESTART;
-	sigaction(SIGPROF, &action, &old_action);
+	sigaction(SIGALRM, &action, &old_action);
 
 	initialized = 1;
 }
 
-void uthread_runall() {
+void uthread_runall(int interval) {
 	if (initialized == 0)
 		uthread_init();
-	timer.it_value.tv_sec = 1;
-	timer.it_value.tv_usec = 0;
-	timer.it_interval.tv_sec = 1;
-	timer.it_interval.tv_usec = 0;
-	setitimer(ITIMER_PROF, &timer, NULL);
+	timer.it_value.tv_sec = 0;
+	timer.it_value.tv_usec = interval;
+	timer.it_interval.tv_sec = 0;
+	timer.it_interval.tv_usec = interval;
+	setitimer(ITIMER_REAL, &timer, NULL);
 	swapcontext(&uthreads[main_utid].context, &sched_thread.context);
-}
-
-int main() {
-	uthread_create(agent1);
-	uthread_create(agent2);
-	printf("preparing to run concurrent threads ...\n");
-	uthread_runall();
-	for (int i = 0; i < 20; ++i) {
-		printf("hello from main thread, i = %d\n", i);
-		for (int j = 0; j < 100000000; ++j)
-				;
-	}
-	printf("back to main and all clear!\n");
-	return 0;
 }
